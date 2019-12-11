@@ -156,8 +156,9 @@ func (c *CopyCommand) ShouldCacheOutput() bool {
 func (c *CopyCommand) CacheCommand(img v1.Image) DockerCommand {
 
 	return &CachingCopyCommand{
-		img: img,
-		cmd: c.cmd,
+		img:          img,
+		buildcontext: c.buildcontext,
+		cmd:          c.cmd,
 	}
 }
 
@@ -168,6 +169,7 @@ func (c *CopyCommand) From() string {
 type CachingCopyCommand struct {
 	BaseCommand
 	img            v1.Image
+	buildcontext   string
 	extractedFiles []string
 	cmd            *instructions.CopyCommand
 }
@@ -181,6 +183,32 @@ func (cr *CachingCopyCommand) ExecuteCommand(config *v1.Config, buildArgs *docke
 		return errors.Wrap(err, "extracting fs from image")
 	}
 	return nil
+}
+
+func (cr *CachingCopyCommand) MetadataOnly() bool {
+	return false
+}
+
+func (cr *CachingCopyCommand) FilesUsedFromContext(config *v1.Config, buildArgs *dockerfile.BuildArgs) ([]string, error) {
+	// We don't use the context if we're performing a copy --from.
+
+	if cr.cmd.From != "" {
+		return nil, nil
+	}
+
+	replacementEnvs := buildArgs.ReplacementEnvs(config.Env)
+	srcs, _, err := util.ResolveEnvAndWildcards(cr.cmd.SourcesAndDest, cr.buildcontext, replacementEnvs)
+	if err != nil {
+		return nil, err
+	}
+
+	files := []string{}
+	for _, src := range srcs {
+		fullPath := filepath.Join(cr.buildcontext, src)
+		files = append(files, fullPath)
+	}
+	logrus.Infof("Using files from context: %v", files)
+	return files, nil
 }
 
 func (cr *CachingCopyCommand) FilesToSnapshot() []string {
